@@ -125,8 +125,8 @@ jobs:
     runs-on: self-hosted
     needs: buils_docker_image_and_push
     steps:
-    - uses: actions/checkout@v4
     - name: Checkout Code
+      uses: actions/checkout@v4
     - name: Set up kubectl
       uses: azure/setup-kubectl@v3
       with:
@@ -138,8 +138,3 @@ jobs:
     - name: Deploy to EKS
       run: |
         kubectl apply -f ds.yml
-   
-
-
-  
-  
