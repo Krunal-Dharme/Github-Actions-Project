@@ -1,3 +1,9 @@
+HELP.md
+target/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
 # Byte-compiled / cache
 __pycache__/
 *.py[cod]
@@ -31,5 +37,5 @@ Thumbs.db
 # Local test fixtures
 sample-event.json
 
-# Agent audit logs (local runs)
+# Agent audit logs
 .agent_logs/
