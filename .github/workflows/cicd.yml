@@ -115,9 +115,9 @@ jobs:
       uses: docker/setup-buildx-action@v3
     - name: Build and push
       uses: docker/build-push-action@v6
-      with:
+      with: 
         push: true
-        tags: adijaiswal/bankapp:latest
+        tags: adijaiswal/bankapp:latest 
 
   
   
