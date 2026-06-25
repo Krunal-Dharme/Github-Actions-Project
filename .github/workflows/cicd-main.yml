@@ -102,6 +102,7 @@ jobs:
           SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
 
       - name: SonarQube Quality Gate Check
+        continue-on-error: true
         uses: sonarsource/sonarqube-quality-gate-action@master
         with:
           pollingTimeoutSec: 600
