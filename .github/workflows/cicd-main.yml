@@ -158,4 +158,4 @@ jobs:
 
     - name: Deploy to GKE
       run: |
-        kubectl apply -f ds.yaml
+        kubectl apply -f ds.yml
