@@ -209,7 +209,7 @@ class GitHubClient:
             login = actor.login or "unknown"
             email = None
             try:
-                user = self.repo.get_user(login)
+                user = self._gh.get_user(login)
                 email = user.email
             except GithubException:
                 pass
