@@ -12,13 +12,13 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v457
+        uses: actions/checkout@v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v45
+        uses: actions/setup-java@v4
         with:
           java-version: '17'
-          distribution: 'temurine'
+          distribution: 'temurin'
           cache: maven
 
       - name: Compile Project
@@ -102,7 +102,7 @@ jobs:
           SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
 
       - name: SonarQube Quality Gate Check
-        continue-on-error: true
+        continue-on-error: false
         uses: sonarsource/sonarqube-quality-gate-action@master
         with:
           pollingTimeoutSec: 600
