@@ -3,6 +3,8 @@ name: AI Agent - Investigate Failures
 # Triggers when ANY workflow in this repo completes (omit `workflows` — GitHub has no "*" wildcard).
 on:
   workflow_run:
+    workflows:
+      - "CICD Pipeline"
     types:
       - completed
 
