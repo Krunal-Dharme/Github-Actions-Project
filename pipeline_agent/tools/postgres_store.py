@@ -128,7 +128,8 @@ class PostgresStore:
         with self._connection() as conn:
             rows = conn.execute(
                 """
-                SELECT workflow_run_id, root_cause, investigated_at, head_sha, head_branch
+                SELECT workflow_run_id, root_cause, investigated_at, head_sha, head_branch,
+                       issue_number
                 FROM pipeline_investigations
                 WHERE repository = %s
                   AND workflow_name = %s
@@ -138,6 +139,50 @@ class PostgresStore:
                 """,
                 (repository, workflow_name, limit),
             ).fetchall()
+            return [dict(r) for r in rows]
+
+    def find_similar_past_root_causes(
+        self,
+        repository: str,
+        root_cause_fragment: str,
+        *,
+        workflow_name: str | None = None,
+        limit: int = 5,
+    ) -> list[dict[str, Any]]:
+        """Find past investigations with a similar root cause (for recurrence correlation)."""
+        fragment = root_cause_fragment.strip()
+        if len(fragment) < 8:
+            return []
+
+        pattern = f"%{fragment[:120]}%"
+        with self._connection() as conn:
+            if workflow_name:
+                rows = conn.execute(
+                    """
+                    SELECT workflow_run_id, workflow_name, root_cause, investigated_at,
+                           issue_number, head_branch
+                    FROM pipeline_investigations
+                    WHERE repository = %s
+                      AND workflow_name = %s
+                      AND root_cause ILIKE %s
+                    ORDER BY investigated_at DESC
+                    LIMIT %s
+                    """,
+                    (repository, workflow_name, pattern, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT workflow_run_id, workflow_name, root_cause, investigated_at,
+                           issue_number, head_branch
+                    FROM pipeline_investigations
+                    WHERE repository = %s
+                      AND root_cause ILIKE %s
+                    ORDER BY investigated_at DESC
+                    LIMIT %s
+                    """,
+                    (repository, pattern, limit),
+                ).fetchall()
             return [dict(r) for r in rows]
 
     def save_investigation(

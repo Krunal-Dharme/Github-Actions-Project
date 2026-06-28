@@ -81,10 +81,16 @@ class Investigator:
         )
 
         self.postgres: PostgresStore | None = None
-        if settings.postgres_enabled and settings.postgres_dsn:
-            self.postgres = PostgresStore(settings.postgres_dsn, self.audit)
-            if settings.postgres_audit_enabled:
-                self.audit.set_postgres_store(self.postgres)
+        if settings.postgres_enabled and settings.resolved_postgres_dsn:
+            try:
+                self.postgres = PostgresStore(settings.resolved_postgres_dsn, self.audit)
+                if settings.postgres_audit_enabled:
+                    self.audit.set_postgres_store(self.postgres)
+            except Exception as exc:
+                print(
+                    f"WARN: Postgres unavailable — continuing without DB history: {exc}",
+                    file=sys.stderr,
+                )
 
         self.email: EmailNotifier | None = None
         if settings.email_enabled and settings.smtp_host:
@@ -279,6 +285,7 @@ class Investigator:
 
             root_cause = extract_root_cause(llm_response.content)
             risk_level = extract_risk_level(llm_response.content)
+            report_md = self._append_postgres_correlation(ctx, report_md, root_cause)
 
             issue = self._maybe_publish_issue(ctx, report_md)
             self.rate_limiter.record_investigation()
@@ -428,6 +435,45 @@ class Investigator:
             )
             return True
         return False
+
+    def _append_postgres_correlation(
+        self,
+        ctx: WorkflowContext,
+        report_md: str,
+        root_cause: str,
+    ) -> str:
+        """Append past similar failures from Postgres when the same root cause recurred."""
+        if not self.postgres or not root_cause.strip():
+            return report_md
+        try:
+            similar = self.postgres.find_similar_past_root_causes(
+                self.settings.github_repository,
+                root_cause,
+                workflow_name=ctx.workflow_name,
+                limit=5,
+            )
+            similar = [
+                row
+                for row in similar
+                if int(row.get("workflow_run_id", 0)) != ctx.run_id
+            ]
+            if not similar:
+                return report_md
+            lines = ["", "---", "", "## Similar Past Failures (database history)", ""]
+            for row in similar:
+                issue_ref = (
+                    f" — issue #{row['issue_number']}"
+                    if row.get("issue_number")
+                    else ""
+                )
+                lines.append(
+                    f"- Run #{row['workflow_run_id']} ({row.get('investigated_at')}): "
+                    f"{(row.get('root_cause') or '')[:200]}{issue_ref}"
+                )
+            return report_md + "\n".join(lines)
+        except Exception as exc:
+            print(f"WARN: Postgres correlation lookup failed: {exc}", file=sys.stderr)
+            return report_md
 
     def _maybe_publish_issue(self, ctx: WorkflowContext, report_md: str) -> Issue | None:
         if self.settings.skip_github_issue_publish:

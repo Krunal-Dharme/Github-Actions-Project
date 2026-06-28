@@ -28,6 +28,28 @@ def test_emit_result_writes_json_to_stdout(capsys):
     payload = json.loads(captured.out.strip())
     assert payload["success"] is True
     assert captured.err == ""
+    assert "[github-debug]" not in captured.out
+
+
+def test_github_tools_debug_writes_to_stderr_not_stdout(capsys):
+    """Regression: debug lines must not pollute investigation.json (stdout redirect)."""
+    from pipeline_agent.tools.github_tools import GitHubTools
+    from pipeline_agent.audit_logger import AuditLogger
+
+    tools = GitHubTools(
+        token="test-token",
+        repository="owner/repo",
+        audit=AuditLogger(log_dir=".agent_logs"),
+    )
+    try:
+        tools._fetch_workflow_logs(12345)
+    except Exception:
+        pass
+    captured = capsys.readouterr()
+    assert "[github-debug]" not in captured.out
+    if captured.err:
+        assert "[github-debug]" in captured.err
+    tools.close()
 
 
 def test_exit_code_success():

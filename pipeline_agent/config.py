@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Literal
+from urllib.parse import quote_plus
 
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -43,7 +44,7 @@ class Settings(BaseSettings):
     use_langchain_agent: bool = Field(default=False, alias="USE_LANGCHAIN_AGENT")
     agent_max_iterations: int = Field(default=3, alias="AGENT_MAX_ITERATIONS")
 
-    # Optional Postgres (GCP)
+    # Optional Postgres (investigation history + audit trail)
     postgres_enabled: bool = Field(
         default=False,
         validation_alias=AliasChoices("POSTGRES_ENABLED", "ENABLE_DB"),
@@ -51,6 +52,30 @@ class Settings(BaseSettings):
     postgres_dsn: str | None = Field(
         default=None,
         validation_alias=AliasChoices("POSTGRES_DSN", "DATABASE_URL"),
+    )
+    postgres_host: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("POSTGRES_HOST", "PGHOST"),
+    )
+    postgres_port: int = Field(
+        default=5432,
+        validation_alias=AliasChoices("POSTGRES_PORT", "PGPORT"),
+    )
+    postgres_database: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("POSTGRES_DB", "POSTGRES_DATABASE", "PGDATABASE"),
+    )
+    postgres_user: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("POSTGRES_USER", "PGUSER"),
+    )
+    postgres_password: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("POSTGRES_PASSWORD", "PGPASSWORD"),
+    )
+    postgres_sslmode: str = Field(
+        default="prefer",
+        validation_alias=AliasChoices("POSTGRES_SSLMODE", "PGSSLMODE"),
     )
 
     # Email (SMTP)
@@ -146,6 +171,26 @@ class Settings(BaseSettings):
     @property
     def repo_name(self) -> str:
         return self.github_repository.split("/")[1]
+
+    @property
+    def resolved_postgres_dsn(self) -> str | None:
+        """Full connection string from DATABASE_URL or individual POSTGRES_* vars."""
+        if self.postgres_dsn and str(self.postgres_dsn).strip():
+            return str(self.postgres_dsn).strip()
+        if (
+            self.postgres_host
+            and self.postgres_database
+            and self.postgres_user
+            and self.postgres_password
+        ):
+            user = quote_plus(self.postgres_user)
+            password = quote_plus(self.postgres_password)
+            return (
+                f"postgresql://{user}:{password}@{self.postgres_host}:"
+                f"{self.postgres_port}/{self.postgres_database}"
+                f"?sslmode={self.postgres_sslmode}"
+            )
+        return None
 
 
 def load_settings() -> Settings:

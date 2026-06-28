@@ -55,11 +55,18 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           MODEL_NAME: ${{ vars.OPENROUTER_MODEL || 'anthropic/claude-3.5-sonnet' }}
           SKIP_GITHUB_ISSUE_PUBLISH: "true"
-          # Postgres (optional — supports legacy secret names)
+          # Postgres — investigation history + past failure correlation
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           POSTGRES_DSN: ${{ secrets.POSTGRES_DSN }}
+          POSTGRES_HOST: ${{ secrets.POSTGRES_HOST }}
+          POSTGRES_PORT: ${{ secrets.POSTGRES_PORT || '5432' }}
+          POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          POSTGRES_SSLMODE: ${{ vars.POSTGRES_SSLMODE || 'require' }}
           ENABLE_DB: ${{ vars.ENABLE_DB || vars.POSTGRES_ENABLED || 'false' }}
           POSTGRES_ENABLED: ${{ vars.POSTGRES_ENABLED || vars.ENABLE_DB || 'false' }}
+          POSTGRES_AUDIT_ENABLED: ${{ vars.POSTGRES_AUDIT_ENABLED || 'true' }}
           # Email — notifies triggering_actor + EMAIL_TO recipients
           ENABLE_EMAIL_NOTIFICATIONS: ${{ vars.ENABLE_EMAIL_NOTIFICATIONS || vars.EMAIL_ENABLED || 'false' }}
           EMAIL_ENABLED: ${{ vars.EMAIL_ENABLED || vars.ENABLE_EMAIL_NOTIFICATIONS || 'false' }}
