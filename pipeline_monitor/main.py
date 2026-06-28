@@ -50,8 +50,10 @@ def _resolve_run_id_and_status(
                 status = status or wr.get("conclusion")
 
         if run_id is not None and status is None:
-            run = investigator.github.get_workflow_run(int(run_id))
-            status = run.conclusion or "unknown"
+            run_ref, _ = investigator.github.resolve_workflow_run(
+                int(run_id), settings.github_event_path
+            )
+            status = run_ref.conclusion or "unknown"
 
         if run_id is None:
             print(

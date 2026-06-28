@@ -5,12 +5,13 @@ from __future__ import annotations
 import hashlib
 import sys
 import time
+import traceback
 from typing import TYPE_CHECKING, Any
 
 from pipeline_monitor.audit_logger import AuditAction, AuditLogger
 from pipeline_monitor.config import Settings
 from pipeline_monitor.email_notifier import EmailNotifier
-from pipeline_monitor.github_client import GitHubClient, WorkflowContext
+from pipeline_monitor.github_client import GitHubClient, WorkflowContext, WorkflowRunRef
 from pipeline_monitor.issue_manager import IssueManager
 from pipeline_monitor.openrouter_client import OpenRouterClient
 from pipeline_monitor.postgres_store import PostgresStore
@@ -142,10 +143,12 @@ class Investigator:
                 if status is None:
                     status = event.get("workflow_run", {}).get("conclusion")
             if status is None:
-                run = self.github.get_workflow_run(run_id)
-                status = run.conclusion or "unknown"
+                run_ref, _ = self.github.resolve_workflow_run(
+                    run_id, self.settings.github_event_path
+                )
+                status = run_ref.conclusion or "unknown"
                 if not workflow_path:
-                    workflow_path = run.path or ""
+                    workflow_path = run_ref.path or ""
             return run_id, status, workflow_path
 
         if not self.settings.github_event_path:
@@ -195,13 +198,19 @@ class Investigator:
                     error=msg,
                 )
 
-            run = self.github.get_workflow_run(run_id)
-            historical = self._load_historical_failures(run.name or "unknown")
+            run_ref, fetch_warnings = self.github.resolve_workflow_run(
+                run_id, self.settings.github_event_path
+            )
+            if fetch_warnings:
+                for warning in fetch_warnings:
+                    print(f"[github-debug] {warning}", file=sys.stderr)
+
+            historical = self._load_historical_failures(run_ref.name or "unknown")
 
             if self.settings.use_langchain_agent:
-                ctx = self._build_minimal_context(run)
+                ctx = self._build_minimal_context(run_ref)
             else:
-                ctx = self.github.collect_context(run)
+                ctx = self.github.collect_context(run_ref)
                 self.audit.log(
                     AuditAction.GITHUB_FETCH,
                     workflow_run_id=run_id,
@@ -298,27 +307,28 @@ class Investigator:
                     file=sys.stderr,
                 )
 
-            return build_investigation_result(
+            warning_note = "\n".join(fetch_warnings) if fetch_warnings else None
+            result = build_investigation_result(
                 success=True,
                 workflow_run_id=run_id,
                 analysis=report_md,
                 root_cause=root_cause,
                 risk_level=risk_level,
                 issue_number=issue.number if issue else None,
+                detailed_error=warning_note,
             )
+            return result
 
         except Exception as exc:
+            tb = traceback.format_exc()
+            print(tb, file=sys.stderr)
             self.audit.log(
                 AuditAction.ERROR,
                 workflow_run_id=run_id,
-                details={"error": str(exc), "type": type(exc).__name__},
+                details={"error": str(exc), "type": type(exc).__name__, "traceback": tb},
                 level="ERROR",
             )
-            return build_investigation_result(
-                success=False,
-                workflow_run_id=run_id,
-                error=str(exc),
-            )
+            return self._recover_from_investigation_error(run_id, exc, tb)
 
     def handle_success(self, workflow_run_id: str | int) -> dict:
         """Lightweight success handler — no LLM; optional email when configured."""
@@ -332,8 +342,10 @@ class Investigator:
         )
 
         try:
-            run = self.github.get_workflow_run(run_id)
-            ctx = self._build_minimal_context(run)
+            run_ref, _ = self.github.resolve_workflow_run(
+                run_id, self.settings.github_event_path
+            )
+            ctx = self._build_minimal_context(run_ref)
             summary_md = build_success_summary(ctx, summary=None)
 
             email_sent = False
@@ -422,7 +434,7 @@ class Investigator:
             return None
         return self.issue_manager.publish_failure_report(ctx, report_md)
 
-    def _build_minimal_context(self, run) -> WorkflowContext:
+    def _build_minimal_context(self, run: WorkflowRunRef) -> WorkflowContext:
         actor_login, actor_email = self.github.resolve_triggering_actor(run)
         commit_msg = ""
         if run.head_sha:
@@ -445,6 +457,57 @@ class Investigator:
             event=run.event or "",
             run_attempt=run.run_attempt or 1,
         )
+
+    def _recover_from_investigation_error(
+        self,
+        run_id: int,
+        exc: Exception,
+        tb: str,
+    ) -> dict:
+        """Produce an investigation report even when the main path fails."""
+        detailed = f"{type(exc).__name__}: {exc}"
+        try:
+            run_ref, warnings = self.github.resolve_workflow_run(
+                run_id, self.settings.github_event_path
+            )
+            ctx = self.github.collect_context(run_ref)
+            note = "; ".join(warnings) if warnings else detailed
+            report_md = self._fallback_report(
+                ctx,
+                f"Investigation recovered after error: {detailed}",
+            )
+            report_md += f"\n\n## Agent Error Traceback\n```\n{tb}\n```\n"
+            issue = self._maybe_publish_issue(ctx, report_md)
+            self._notify_failure(ctx, report_md, issue)
+            return build_investigation_result(
+                success=True,
+                workflow_run_id=run_id,
+                analysis=report_md,
+                root_cause=extract_root_cause(report_md) or "Recovered after agent error",
+                risk_level=extract_risk_level(report_md),
+                error=str(exc),
+                detailed_error=note,
+                traceback_str=tb,
+                issue_number=issue.number if issue else None,
+            )
+        except Exception:
+            tb2 = traceback.format_exc()
+            print(tb2, file=sys.stderr)
+            report_md = (
+                f"# Pipeline Failure Report — Run #{run_id}\n\n"
+                f"**Error**: {detailed}\n\n"
+                f"## Traceback\n```\n{tb}\n```\n"
+            )
+            return build_investigation_result(
+                success=True,
+                workflow_run_id=run_id,
+                analysis=report_md,
+                root_cause="Investigation agent error — see traceback",
+                risk_level="Unknown",
+                error=str(exc),
+                detailed_error=detailed,
+                traceback_str=tb,
+            )
 
     def _run_direct_analysis(self, run_id: int, ctx: WorkflowContext, historical: list | None):
         context_md = build_context_for_llm(ctx, historical)

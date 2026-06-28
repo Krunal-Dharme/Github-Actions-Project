@@ -20,9 +20,15 @@ from io import BytesIO
 from typing import Any
 
 import httpx
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from pipeline_agent.audit_logger import AuditLogger
+
+
+def _is_non_retryable_http_error(exc: BaseException) -> bool:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in (401, 403, 404, 422)
+    return False
 
 
 @dataclass
@@ -151,7 +157,12 @@ class GitHubTools:
     # Tool 1: get_workflow_logs (from snippet — improved)
     # ------------------------------------------------------------------ #
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=20))
+    @retry(
+        retry=retry_if_exception(lambda exc: not _is_non_retryable_http_error(exc)),
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=20),
+        reraise=True,
+    )
     def get_workflow_logs(self, workflow_run_id: int) -> WorkflowLogsResult:
         """Fetch logs from a failed GitHub Actions workflow run."""
         return self._timed_tool_call(
@@ -162,11 +173,25 @@ class GitHubTools:
 
     def _fetch_workflow_logs(self, workflow_run_id: int) -> WorkflowLogsResult:
         run_url = f"{self._api_base}/repos/{self.repository}/actions/runs/{workflow_run_id}"
+        print(f"[github-debug] API endpoint: GET {run_url}", flush=True)
         run_response = self._http.get(run_url)
+        if run_response.status_code == 404:
+            return WorkflowLogsResult(
+                workflow_name="unknown",
+                conclusion="failure",
+                started_at="",
+                branch="",
+                head_sha="",
+                log_text=(
+                    f"[Logs unavailable: GET {run_url} returned 404 "
+                    f"for repository={self.repository}]"
+                ),
+            )
         run_response.raise_for_status()
         run_data = run_response.json()
 
         jobs_url = f"{run_url}/jobs"
+        print(f"[github-debug] API endpoint: GET {jobs_url}", flush=True)
         jobs_response = self._http.get(jobs_url, params={"per_page": 100})
         jobs_response.raise_for_status()
         jobs_data = jobs_response.json()

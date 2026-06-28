@@ -22,6 +22,8 @@ def test_build_investigation_result_contract():
     assert result["root_cause"] == "Missing dependency"
     assert result["risk_level"] == "Low"
     assert result["error"] is None
+    assert result["detailed_error"] is None
+    assert result["traceback"] is None
     assert result["issue_number"] == 42
 
 

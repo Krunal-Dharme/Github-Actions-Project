@@ -190,6 +190,8 @@ def build_investigation_result(
     root_cause: str = "",
     risk_level: str = "Unknown",
     error: str | None = None,
+    detailed_error: str | None = None,
+    traceback_str: str | None = None,
     issue_number: int | None = None,
 ) -> dict:
     """Build the structured investigation response dict (§8 contract)."""
@@ -200,6 +202,8 @@ def build_investigation_result(
         "root_cause": root_cause,
         "risk_level": risk_level,
         "error": error,
+        "detailed_error": detailed_error,
+        "traceback": traceback_str,
         "issue_number": issue_number,
     }
 
