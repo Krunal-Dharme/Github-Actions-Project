@@ -1,7 +1,7 @@
 name: CICD Pipeline
 
 on:
-  pushe:
+  push:
     branches:
       - main
 
@@ -12,13 +12,13 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v45
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v45
         with:
           java-version: '17'
-          distribution: 'temurin'
+          distribution: 'temurine'
           cache: maven
 
       - name: Compile Project
