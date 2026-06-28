@@ -87,20 +87,26 @@ jobs:
         id: read_output
         if: always() && hashFiles('investigation.json') != ''
         run: |
+          set -euo pipefail
           cat investigation.json
-          echo "analysis<<EOF" >> "$GITHUB_OUTPUT"
-          jq -r '.analysis // "No analysis available"' investigation.json >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
-          echo "root_cause=$(jq -r '.root_cause // "Unknown"' investigation.json)" >> "$GITHUB_OUTPUT"
-          echo "risk_level=$(jq -r '.risk_level // "Unknown"' investigation.json)" >> "$GITHUB_OUTPUT"
+          jq -e . investigation.json > /dev/null
+
+          # Base64-encode multiline Markdown fields — safe for $GITHUB_OUTPUT (no heredoc/EOF issues).
+          analysis_b64=$(jq -r '.analysis // "No analysis available"' investigation.json | base64 -w 0)
+          root_cause_b64=$(jq -r '.root_cause // "Unknown"' investigation.json | base64 -w 0)
+          risk_level_b64=$(jq -r '.risk_level // "Unknown"' investigation.json | base64 -w 0)
+
+          echo "analysis_b64=$analysis_b64" >> "$GITHUB_OUTPUT"
+          echo "root_cause_b64=$root_cause_b64" >> "$GITHUB_OUTPUT"
+          echo "risk_level_b64=$risk_level_b64" >> "$GITHUB_OUTPUT"
 
       - name: Post results to GitHub issue
-        if: always() && steps.read_output.outputs.root_cause != ''
+        if: always() && steps.read_output.outputs.root_cause_b64 != ''
         uses: actions/github-script@v7
         env:
-          ANALYSIS: ${{ steps.read_output.outputs.analysis }}
-          ROOT_CAUSE: ${{ steps.read_output.outputs.root_cause }}
-          RISK_LEVEL: ${{ steps.read_output.outputs.risk_level }}
+          ANALYSIS_B64: ${{ steps.read_output.outputs.analysis_b64 }}
+          ROOT_CAUSE_B64: ${{ steps.read_output.outputs.root_cause_b64 }}
+          RISK_LEVEL_B64: ${{ steps.read_output.outputs.risk_level_b64 }}
         with:
           script: |
             const workflowName = context.payload.workflow_run.name;
@@ -109,9 +115,19 @@ jobs:
             const branch = context.payload.workflow_run.head_branch;
             const commit = context.payload.workflow_run.head_sha;
             const conclusion = context.payload.workflow_run.conclusion;
-            const analysis = process.env.ANALYSIS || "No analysis available";
-            const rootCause = process.env.ROOT_CAUSE || "Unknown";
-            const riskLevel = process.env.RISK_LEVEL || "Unknown";
+
+            const decode = (b64, fallback) => {
+              if (!b64) return fallback;
+              try {
+                return Buffer.from(b64, "base64").toString("utf8") || fallback;
+              } catch {
+                return fallback;
+              }
+            };
+
+            const analysis = decode(process.env.ANALYSIS_B64, "No analysis available");
+            const rootCause = decode(process.env.ROOT_CAUSE_B64, "Unknown");
+            const riskLevel = decode(process.env.RISK_LEVEL_B64, "Unknown");
 
             const title = `Pipeline Failure: ${workflowName}`;
             const body = [
