@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pipeline-health-monitor"
+version = "1.0.0"
+description = "Production-ready AI Pipeline Health Monitor for GitHub Actions"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "PyGithub>=2.1.1",
+    "PyJWT>=2.8.0",
+    "cryptography>=41.0.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.1.0",
+    "psycopg[binary,pool]>=3.1.0",
+    "tenacity>=8.2.0",
+    "langchain-openai>=0.2.0",
+    "langchain-core>=0.3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+pipeline-agent = "pipeline_agent.main:main"
+pipeline-monitor = "pipeline_agent.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pipeline_agent*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
