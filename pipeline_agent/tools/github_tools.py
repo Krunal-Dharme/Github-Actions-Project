@@ -11,6 +11,7 @@ Production improvements over the original snippets:
 from __future__ import annotations
 
 import re
+import sys
 import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -173,7 +174,7 @@ class GitHubTools:
 
     def _fetch_workflow_logs(self, workflow_run_id: int) -> WorkflowLogsResult:
         run_url = f"{self._api_base}/repos/{self.repository}/actions/runs/{workflow_run_id}"
-        print(f"[github-debug] API endpoint: GET {run_url}", flush=True)
+        print(f"[github-debug] API endpoint: GET {run_url}", file=sys.stderr, flush=True)
         run_response = self._http.get(run_url)
         if run_response.status_code == 404:
             return WorkflowLogsResult(
@@ -191,7 +192,7 @@ class GitHubTools:
         run_data = run_response.json()
 
         jobs_url = f"{run_url}/jobs"
-        print(f"[github-debug] API endpoint: GET {jobs_url}", flush=True)
+        print(f"[github-debug] API endpoint: GET {jobs_url}", file=sys.stderr, flush=True)
         jobs_response = self._http.get(jobs_url, params={"per_page": 100})
         jobs_response.raise_for_status()
         jobs_data = jobs_response.json()
