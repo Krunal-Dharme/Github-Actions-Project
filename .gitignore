@@ -1,9 +1,12 @@
+<<<<<<< HEAD
 HELP.md
 target/
 !.mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
 
+=======
+>>>>>>> 530f3d4 (Add AI agent project)
 # Byte-compiled / cache
 __pycache__/
 *.py[cod]
@@ -38,4 +41,6 @@ Thumbs.db
 sample-event.json
 
 # Agent audit logs
+.agent_logs/
+# Agent audit logs (local runs)
 .agent_logs/
