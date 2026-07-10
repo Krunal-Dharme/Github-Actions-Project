@@ -6,8 +6,11 @@ name: AI Agent - Investigate Failures
 # Add to any pipeline:
 #   investigate-failure:
 #     needs: [job-a, job-b, ...]
-#     if: failure() && !cancelled()
-#     uses: ./.github/workflows/investigate-on-failure-hook.yml
+#     if: always() && !cancelled() && contains(needs.*.result, 'failure')
+#     uses: ./.github/workflows/investigate-failures.yml
+#     with:
+#       workflow-run-id: ${{ github.run_id }}
+#       conclusion: failure
 #     secrets: inherit
 on:
   workflow_call:

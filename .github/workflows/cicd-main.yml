@@ -167,6 +167,14 @@ jobs:
       - build_project_and_sonar_scan
       - build_docker_image_and_push
       - deploy_to_gke
-    if: failure() && !cancelled()
-    uses: ./.github/workflows/investigate-on-failure-hook.yml
+    if: always() && !cancelled() && contains(needs.*.result, 'failure')
+    uses: ./.github/workflows/investigate-failures.yml
+    with:
+      workflow-run-id: ${{ github.run_id }}
+      conclusion: failure
     secrets: inherit
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: read
