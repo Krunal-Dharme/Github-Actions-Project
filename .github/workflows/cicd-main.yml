@@ -158,3 +158,15 @@ jobs:
     - name: Deploy to GKE
       run: |
         kubectl apply -f ds.yml
+
+  investigate-failure:
+    needs:
+      - compile
+      - security-check
+      - test
+      - build_project_and_sonar_scan
+      - build_docker_image_and_push
+      - deploy_to_gke
+    if: failure() && !cancelled()
+    uses: ./.github/workflows/investigate-on-failure-hook.yml
+    secrets: inherit

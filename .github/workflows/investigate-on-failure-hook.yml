@@ -1,0 +1,26 @@
+name: Investigate On Failure
+
+# Drop-in reusable hook — add as the last job in any pipeline.
+# No workflow names to maintain; investigation runs when the caller workflow fails.
+#
+#   investigate-failure:
+#     needs: [job-a, job-b, ...]   # list every job in this workflow
+#     if: failure() && !cancelled()
+#     uses: ./.github/workflows/investigate-on-failure-hook.yml
+#     secrets: inherit
+on:
+  workflow_call:
+    secrets: inherit
+
+jobs:
+  investigate:
+    uses: ./.github/workflows/investigate-failures.yml
+    with:
+      workflow-run-id: ${{ github.run_id }}
+      conclusion: failure
+    secrets: inherit
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: read

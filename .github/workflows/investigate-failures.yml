@@ -1,23 +1,45 @@
 name: AI Agent - Investigate Failures
 
-# Triggers when cicd-main.yml completes. workflow_run matches by workflow `name`, not file path.
+# Reusable workflow — call from any pipeline on failure. No workflow name list to maintain.
+# GitHub workflow_run cannot watch all workflows (workflows: is required, no wildcard).
+#
+# Add to any pipeline:
+#   investigate-failure:
+#     needs: [job-a, job-b, ...]
+#     if: failure() && !cancelled()
+#     uses: ./.github/workflows/investigate-on-failure-hook.yml
+#     secrets: inherit
 on:
-  workflow_run:
-    workflows:
-      - CICD Pipeline
-    types:
-      - completed
+  workflow_call:
+    inputs:
+      workflow-run-id:
+        description: GitHub Actions run ID of the failed pipeline
+        required: true
+        type: string
+      conclusion:
+        description: Workflow conclusion to investigate
+        required: false
+        default: failure
+        type: string
+  workflow_dispatch:
+    inputs:
+      workflow-run-id:
+        description: GitHub Actions run ID to investigate
+        required: true
+        type: string
+      conclusion:
+        description: Workflow conclusion
+        required: false
+        default: failure
+        type: string
 
 concurrency:
-  group: investigate-failures-${{ github.event.workflow_run.id }}
+  group: investigate-failures-${{ inputs.workflow-run-id }}
   cancel-in-progress: true
 
 jobs:
   investigate:
     name: AI Agent - Investigate Failures
-    if: >
-      github.event.workflow_run.conclusion != 'success' &&
-      github.event.workflow_run.path == '.github/workflows/cicd-main.yml'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -86,8 +108,8 @@ jobs:
         run: |
           source .venv/bin/activate
           python -m pipeline_agent.main \
-            --workflow-run-id "${{ github.event.workflow_run.id }}" \
-            --status "${{ github.event.workflow_run.conclusion }}" \
+            --workflow-run-id "${{ inputs.workflow-run-id }}" \
+            --status "${{ inputs.conclusion }}" \
             > investigation.json
 
       - name: Read investigation output
@@ -114,14 +136,22 @@ jobs:
           ANALYSIS_B64: ${{ steps.read_output.outputs.analysis_b64 }}
           ROOT_CAUSE_B64: ${{ steps.read_output.outputs.root_cause_b64 }}
           RISK_LEVEL_B64: ${{ steps.read_output.outputs.risk_level_b64 }}
+          WORKFLOW_RUN_ID: ${{ inputs.workflow-run-id }}
+          WORKFLOW_CONCLUSION: ${{ inputs.conclusion }}
         with:
           script: |
-            const workflowName = context.payload.workflow_run.name;
-            const workflowUrl = context.payload.workflow_run.html_url;
-            const runId = context.payload.workflow_run.id;
-            const branch = context.payload.workflow_run.head_branch;
-            const commit = context.payload.workflow_run.head_sha;
-            const conclusion = context.payload.workflow_run.conclusion;
+            const runId = Number(process.env.WORKFLOW_RUN_ID);
+            const { data: run } = await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId,
+            });
+
+            const workflowName = run.name;
+            const workflowUrl = run.html_url;
+            const branch = run.head_branch;
+            const commit = run.head_sha;
+            const conclusion = run.conclusion || process.env.WORKFLOW_CONCLUSION || "failure";
 
             const decode = (b64, fallback) => {
               if (!b64) return fallback;
@@ -194,6 +224,6 @@ jobs:
         if: always() && hashFiles('investigation.json') != ''
         uses: actions/upload-artifact@v4
         with:
-          name: investigation-${{ github.event.workflow_run.id }}
+          name: investigation-${{ inputs.workflow-run-id }}
           path: investigation.json
           retention-days: 30
