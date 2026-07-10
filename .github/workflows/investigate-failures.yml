@@ -1,9 +1,10 @@
 name: AI Agent - Investigate Failures
 
-# Triggers when ANY workflow in this repo completes.
-# Do NOT list workflow names — GitHub has no "*" wildcard; omit `workflows` to watch all.
+# Triggers when cicd-main.yml completes. workflow_run matches by workflow `name`, not file path.
 on:
   workflow_run:
+    workflows:
+      - CICD Pipeline
     types:
       - completed
 
@@ -16,7 +17,7 @@ jobs:
     name: AI Agent - Investigate Failures
     if: >
       github.event.workflow_run.conclusion != 'success' &&
-      github.event.workflow_run.path != '.github/workflows/investigate-failures.yml'
+      github.event.workflow_run.path == '.github/workflows/cicd-main.yml'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
