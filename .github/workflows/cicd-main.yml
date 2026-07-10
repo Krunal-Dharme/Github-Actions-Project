@@ -177,6 +177,9 @@ jobs:
       issues: write
       pull-requests: read
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Run investigation
         uses: ./.github/actions/investigate-pipeline-failure
         with:
