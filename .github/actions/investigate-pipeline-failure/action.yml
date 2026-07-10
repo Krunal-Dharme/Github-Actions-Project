@@ -1,0 +1,209 @@
+name: Investigate Pipeline Failure
+description: Run the AI investigation agent and publish results to a GitHub issue
+
+inputs:
+  workflow-run-id:
+    description: GitHub Actions run ID of the failed pipeline
+    required: true
+  conclusion:
+    description: Workflow conclusion
+    required: false
+    default: failure
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install uv
+      shell: bash
+      run: |
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+    - name: Create virtual environment and install dependencies
+      shell: bash
+      run: |
+        uv venv
+        source .venv/bin/activate
+        uv pip install -e .
+
+    - name: Run AI investigation
+      id: investigate
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ env.GITHUB_TOKEN }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        GITHUB_EVENT_PATH: ${{ github.event_path }}
+        OPENROUTER_API_KEY: ${{ env.OPENROUTER_API_KEY }}
+        MODEL_NAME: ${{ env.MODEL_NAME }}
+        SKIP_GITHUB_ISSUE_PUBLISH: "true"
+        DATABASE_URL: ${{ env.DATABASE_URL }}
+        POSTGRES_DSN: ${{ env.POSTGRES_DSN }}
+        POSTGRES_HOST: ${{ env.POSTGRES_HOST }}
+        POSTGRES_PORT: ${{ env.POSTGRES_PORT }}
+        POSTGRES_DB: ${{ env.POSTGRES_DB }}
+        POSTGRES_USER: ${{ env.POSTGRES_USER }}
+        POSTGRES_PASSWORD: ${{ env.POSTGRES_PASSWORD }}
+        POSTGRES_SSLMODE: ${{ env.POSTGRES_SSLMODE }}
+        ENABLE_DB: ${{ env.ENABLE_DB }}
+        POSTGRES_ENABLED: ${{ env.POSTGRES_ENABLED }}
+        POSTGRES_AUDIT_ENABLED: ${{ env.POSTGRES_AUDIT_ENABLED }}
+        ENABLE_EMAIL_NOTIFICATIONS: ${{ env.ENABLE_EMAIL_NOTIFICATIONS }}
+        EMAIL_ENABLED: ${{ env.EMAIL_ENABLED }}
+        EMAIL_SMTP_HOST: ${{ env.EMAIL_SMTP_HOST }}
+        SMTP_HOST: ${{ env.SMTP_HOST }}
+        EMAIL_SMTP_PORT: ${{ env.EMAIL_SMTP_PORT }}
+        SMTP_PORT: ${{ env.SMTP_PORT }}
+        EMAIL_USERNAME: ${{ env.EMAIL_USERNAME }}
+        SMTP_USER: ${{ env.SMTP_USER }}
+        EMAIL_PASSWORD: ${{ env.EMAIL_PASSWORD }}
+        SMTP_PASSWORD: ${{ env.SMTP_PASSWORD }}
+        EMAIL_FROM: ${{ env.EMAIL_FROM }}
+        SMTP_FROM: ${{ env.SMTP_FROM }}
+        EMAIL_TO: ${{ env.EMAIL_TO }}
+        EMAIL_RECIPIENTS: ${{ env.EMAIL_RECIPIENTS }}
+        AUDIT_LOG_DIR: ${{ runner.temp }}/agent_logs
+      run: |
+        set -o pipefail
+        source .venv/bin/activate
+        python -m pipeline_agent.main \
+          --workflow-run-id "${{ inputs.workflow-run-id }}" \
+          --status "${{ inputs.conclusion }}" \
+          2> investigation.stderr | tee investigation.json
+        agent_exit=${PIPESTATUS[0]}
+        if [ "$agent_exit" -ne 0 ]; then
+          echo "::warning::AI investigation exited with code $agent_exit"
+          if [ ! -s investigation.json ]; then
+            printf '{"root_cause":"Investigation agent failed — see job logs","analysis":"Check investigation.stderr in job output","risk_level":"Unknown","success":false}\n' > investigation.json
+          fi
+        fi
+
+    - name: Read investigation output
+      id: read_output
+      shell: bash
+      if: always()
+      run: |
+        if [ ! -s investigation.json ]; then
+          echo "No investigation.json produced"
+          exit 0
+        fi
+        set -euo pipefail
+        cat investigation.json
+        jq -e . investigation.json > /dev/null
+
+        analysis_b64=$(jq -r '.analysis // "No analysis available"' investigation.json | base64 -w 0)
+        root_cause_b64=$(jq -r '.root_cause // "Unknown"' investigation.json | base64 -w 0)
+        risk_level_b64=$(jq -r '.risk_level // "Unknown"' investigation.json | base64 -w 0)
+
+        echo "analysis_b64=$analysis_b64" >> "$GITHUB_OUTPUT"
+        echo "root_cause_b64=$root_cause_b64" >> "$GITHUB_OUTPUT"
+        echo "risk_level_b64=$risk_level_b64" >> "$GITHUB_OUTPUT"
+
+    - name: Post results to GitHub issue
+      if: always() && steps.read_output.outputs.root_cause_b64 != ''
+      uses: actions/github-script@v7
+      env:
+        ANALYSIS_B64: ${{ steps.read_output.outputs.analysis_b64 }}
+        ROOT_CAUSE_B64: ${{ steps.read_output.outputs.root_cause_b64 }}
+        RISK_LEVEL_B64: ${{ steps.read_output.outputs.risk_level_b64 }}
+        WORKFLOW_RUN_ID: ${{ inputs.workflow-run-id }}
+        WORKFLOW_CONCLUSION: ${{ inputs.conclusion }}
+      with:
+        script: |
+          const runId = Number(process.env.WORKFLOW_RUN_ID);
+          const { data: run } = await github.rest.actions.getWorkflowRun({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            run_id: runId,
+          });
+
+          const workflowName = run.name;
+          const workflowUrl = run.html_url;
+          const branch = run.head_branch;
+          const commit = run.head_sha;
+          const conclusion = run.conclusion || process.env.WORKFLOW_CONCLUSION || "failure";
+
+          const decode = (b64, fallback) => {
+            if (!b64) return fallback;
+            try {
+              return Buffer.from(b64, "base64").toString("utf8") || fallback;
+            } catch {
+              return fallback;
+            }
+          };
+
+          const analysis = decode(process.env.ANALYSIS_B64, "No analysis available");
+          const rootCause = decode(process.env.ROOT_CAUSE_B64, "Unknown");
+          const riskLevel = decode(process.env.RISK_LEVEL_B64, "Unknown");
+
+          const title = `Pipeline Failure: ${workflowName}`;
+          const body = [
+            "## Automated Investigation Report",
+            "",
+            `**Workflow**: [${workflowName}](${workflowUrl})`,
+            `**Run ID**: ${runId}`,
+            `**Conclusion**: \`${conclusion}\``,
+            `**Branch**: \`${branch}\``,
+            `**Commit**: \`${commit}\``,
+            "",
+            "### Root Cause",
+            rootCause,
+            "",
+            "### Risk Level",
+            riskLevel,
+            "",
+            "### Detailed Analysis",
+            analysis,
+            "",
+            "### Approval Notes",
+            "- This agent does **not** execute any commands by itself.",
+            "- All remediation steps must be reviewed and executed by a human operator.",
+            "",
+            "*This issue was automatically created by the Pipeline Health Monitor AI Agent*",
+          ].join("\n");
+
+          const issues = await github.rest.issues.listForRepo({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            state: "open",
+            labels: "pipeline-failure",
+          });
+
+          const existingIssue = issues.data.find(issue =>
+            issue.title.includes(workflowName) || issue.title.includes(String(runId))
+          );
+
+          if (existingIssue) {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: existingIssue.number,
+              body: `## New Failure Detected\n\n${body}`,
+            });
+          } else {
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body,
+              labels: ["pipeline-failure", "ai-investigated"],
+            });
+          }
+
+    - name: Upload investigation artifact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: investigation-${{ inputs.workflow-run-id }}
+        path: |
+          investigation.json
+          investigation.stderr
+        if-no-files-found: ignore
+        retention-days: 30
