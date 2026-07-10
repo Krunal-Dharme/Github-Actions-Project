@@ -1,24 +1,21 @@
 name: AI Agent - Investigate Failures
 
-# Centralized failure monitor — no changes required in individual pipeline workflows.
+# Enterprise failure monitor — zero per-pipeline changes, no workflow name list, no cron.
 #
-# Triggers:
-#   1. workflow_run  — immediate investigation when listed workflows finish
-#   2. schedule      — polls GitHub API for ANY failed run (no workflow name list)
-#   3. workflow_dispatch — manual investigation by run ID
+# Uses the workflow_job event: GitHub fires it for every job completion in this repo.
+# We wait until the parent workflow run is fully completed and failed, then investigate once.
+#
+# Deploy: copy this workflow + .github/actions/investigate-pipeline-failure/ into each repo
+# (or use an org repository template / ruleset).
 on:
-  workflow_run:
-    workflows:
-      - CICD Pipeline
+  workflow_job:
     types:
       - completed
-  schedule:
-    - cron: "*/5 * * * *"
   workflow_dispatch:
     inputs:
       workflow-run-id:
-        description: GitHub Actions run ID to investigate (leave empty to scan recent failures)
-        required: false
+        description: GitHub Actions run ID to investigate
+        required: true
         type: string
       conclusion:
         description: Workflow conclusion
@@ -33,124 +30,81 @@ permissions:
   pull-requests: read
 
 jobs:
-  discover:
-    name: Discover failed workflow runs
+  investigate:
+    name: AI Agent - Investigate Failures
+    # Fast pre-filter: skip successful job completions (workflow still wakes, job exits immediately).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_job' && github.event.workflow_job.conclusion == 'failure')
     runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.find.outputs.matrix }}
-      has_runs: ${{ steps.find.outputs.has_runs }}
+    timeout-minutes: 5
+    concurrency:
+      group: investigate-failures-${{ github.event.workflow_job.run_id || inputs.workflow-run-id }}
+      cancel-in-progress: false
     steps:
-      - name: Find workflow runs to investigate
-        id: find
+      - name: Resolve failed workflow run
+        id: target
         uses: actions/github-script@v7
         with:
           script: |
-            const monitorWorkflowPaths = [
+            const monitorWorkflowPaths = new Set([
               ".github/workflows/investigate-failures.yml",
-            ];
-            const include = [];
-
-            const addRun = (runId, conclusion) => {
-              if (!runId) return;
-              include.push({
-                run_id: String(runId),
-                conclusion: conclusion || "failure",
-              });
-            };
+            ]);
 
             if (context.eventName === "workflow_dispatch") {
               const runId = "${{ inputs.workflow-run-id }}".trim();
-              if (runId) {
-                addRun(runId, "${{ inputs.conclusion }}");
-              } else {
-                core.info("No run ID provided — scanning recent failures via API.");
+              if (!runId) {
+                core.setFailed("workflow-run-id is required for manual dispatch.");
+                return;
               }
+              core.setOutput("proceed", "true");
+              core.setOutput("run_id", runId);
+              core.setOutput("conclusion", "${{ inputs.conclusion }}" || "failure");
+              return;
             }
 
-            if (context.eventName === "workflow_run") {
-              const wr = context.payload.workflow_run;
-              const isMonitor = monitorWorkflowPaths.some((path) => wr.path === path);
-              if (!isMonitor && wr.conclusion && wr.conclusion !== "success") {
-                addRun(wr.id, wr.conclusion);
-              }
+            const job = context.payload.workflow_job;
+            const runId = job.run_id;
+
+            const { data: run } = await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId,
+            });
+
+            if (monitorWorkflowPaths.has(run.path ?? "")) {
+              core.info(`Skipping monitor workflow run ${runId}.`);
+              core.setOutput("proceed", "false");
+              return;
             }
 
-            if (context.eventName === "schedule" || (context.eventName === "workflow_dispatch" && !"${{ inputs.workflow-run-id }}".trim())) {
-              const lookbackMinutes = Number("${{ vars.INVESTIGATION_LOOKBACK_MINUTES || '30' }}");
-              const cutoff = Date.now() - lookbackMinutes * 60 * 1000;
-
-              const { data: failedRuns } = await github.rest.actions.listWorkflowRunsForRepo({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                status: "failure",
-                per_page: 50,
-              });
-
-              const { data: issuePage } = await github.rest.issues.listForRepo({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                state: "all",
-                labels: "pipeline-failure",
-                per_page: 100,
-              });
-
-              const investigatedRunIds = new Set();
-              for (const issue of issuePage) {
-                const haystack = `${issue.title}\n${issue.body || ""}`;
-                for (const match of haystack.matchAll(/\*\*Run ID\*\*:\s*(\d+)/g)) {
-                  investigatedRunIds.add(Number(match[1]));
-                }
-                for (const match of haystack.matchAll(/Run #(\d+)/g)) {
-                  investigatedRunIds.add(Number(match[1]));
-                }
-              }
-
-              for (const run of failedRuns.workflow_runs) {
-                const createdAt = new Date(run.created_at).getTime();
-                const isMonitor = monitorWorkflowPaths.some((path) => run.path === path);
-                if (createdAt < cutoff || isMonitor) continue;
-                if (investigatedRunIds.has(run.id)) continue;
-                if (include.some((item) => item.run_id === String(run.id))) continue;
-                include.push({
-                  run_id: String(run.id),
-                  conclusion: run.conclusion || "failure",
-                });
-              }
+            if (run.status !== "completed") {
+              core.info(`Workflow run ${runId} still ${run.status}; waiting for completion.`);
+              core.setOutput("proceed", "false");
+              return;
             }
 
-            const unique = [];
-            const seen = new Set();
-            for (const item of include) {
-              if (seen.has(item.run_id)) continue;
-              seen.add(item.run_id);
-              unique.push(item);
+            if (!run.conclusion || run.conclusion === "success") {
+              core.info(`Workflow run ${runId} conclusion=${run.conclusion}; no investigation needed.`);
+              core.setOutput("proceed", "false");
+              return;
             }
 
-            core.info(`Runs queued for investigation: ${unique.map((item) => item.run_id).join(", ") || "(none)"}`);
-            core.setOutput("matrix", JSON.stringify({ include: unique }));
-            core.setOutput("has_runs", unique.length > 0 ? "true" : "false");
+            core.info(`Investigating failed workflow run ${runId} (${run.name}, conclusion=${run.conclusion}).`);
+            core.setOutput("proceed", "true");
+            core.setOutput("run_id", String(run.id));
+            core.setOutput("conclusion", run.conclusion);
 
-  investigate:
-    name: AI Agent - Investigate Failures
-    needs: discover
-    if: needs.discover.outputs.has_runs == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
-    concurrency:
-      group: investigate-failures-${{ matrix.run_id }}
-      cancel-in-progress: true
-    steps:
       - name: Checkout code
+        if: steps.target.outputs.proceed == 'true'
         uses: actions/checkout@v4
 
       - name: Run investigation
+        if: steps.target.outputs.proceed == 'true'
         uses: ./.github/actions/investigate-pipeline-failure
         with:
-          workflow-run-id: ${{ matrix.run_id }}
-          conclusion: ${{ matrix.conclusion }}
+          workflow-run-id: ${{ steps.target.outputs.run_id }}
+          conclusion: ${{ steps.target.outputs.conclusion }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
