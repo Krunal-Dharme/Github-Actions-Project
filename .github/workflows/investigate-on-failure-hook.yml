@@ -10,7 +10,6 @@ name: Investigate On Failure
 #     secrets: inherit
 on:
   workflow_call:
-    secrets: inherit
 
 jobs:
   investigate:
